@@ -20,6 +20,7 @@ app = FastAPI(
 
 _metrics = {"total": 0, "success": 0, "total_ms": 0.0}
 
+
 def log_event(event: str, level: str = "INFO", **kwargs):
     record = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -29,15 +30,18 @@ def log_event(event: str, level: str = "INFO", **kwargs):
     }
     print(json.dumps(record, ensure_ascii=False), flush=True)
 
+
 class BatchPredictRequest(BaseModel):
     images_base64: list[str] = Field(..., description="Lista de imagens em base64")
     confidence: float = Field(0.25, ge=0.0, le=1.0)
     model_name: str = Field("yolov8n.pt")
 
+
 def _decode_image(image_base64: str) -> np.ndarray:
     raw = base64.b64decode(image_base64)
     img = Image.open(io.BytesIO(raw)).convert("RGB")
     return np.array(img)
+
 
 def _load_image_from_request(request: PredictRequest) -> np.ndarray:
     if not request.image_base64 and not request.image_url:
@@ -49,6 +53,7 @@ def _load_image_from_request(request: PredictRequest) -> np.ndarray:
         resp.raise_for_status()
         img = Image.open(io.BytesIO(resp.content)).convert("RGB")
         return np.array(img)
+
 
 def _run_inference(image_np: np.ndarray, model_name: str, confidence: float) -> PredictResponse:
     model = load_model(model_name)
@@ -79,6 +84,7 @@ def _run_inference(image_np: np.ndarray, model_name: str, confidence: float) -> 
         image_height=h,
     )
 
+
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     model_name = get_default_model_name()
@@ -89,6 +95,7 @@ async def health_check():
         loaded = False
     return HealthResponse(status="ok", model_loaded=loaded, model_name=model_name)
 
+
 @app.get("/metrics")
 async def get_metrics():
     avg_ms = _metrics["total_ms"] / _metrics["success"] if _metrics["success"] > 0 else 0.0
@@ -98,6 +105,7 @@ async def get_metrics():
         "successful_requests": _metrics["success"],
         "avg_inference_ms": round(avg_ms, 2),
     }
+
 
 @app.post("/predict", response_model=PredictResponse)
 def predict(request: PredictRequest):
@@ -127,6 +135,7 @@ def predict(request: PredictRequest):
     except Exception as e:
         log_event("predict_error", level="ERROR", request_id=req_id, reason=str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/predict/batch")
 def predict_batch(request: BatchPredictRequest):
