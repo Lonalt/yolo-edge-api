@@ -3,16 +3,14 @@ import io
 import json
 import time
 import uuid
-from pathlib import Path
-from typing import List, Optional
-from fastapi import FastAPI, HTTPException
-from PIL import Image
-import numpy as np
-import httpx
-from pydantic import BaseModel, Field
 
-from schemas import PredictRequest, PredictResponse, HealthResponse, Detection
-from model import load_model, get_default_model_name
+import httpx
+import numpy as np
+from fastapi import FastAPI, HTTPException
+from model import get_default_model_name, load_model
+from PIL import Image
+from pydantic import BaseModel, Field
+from schemas import Detection, HealthResponse, PredictRequest, PredictResponse
 
 app = FastAPI(
     title="YOLO Inference API",
@@ -32,7 +30,7 @@ def log_event(event: str, level: str = "INFO", **kwargs):
     print(json.dumps(record, ensure_ascii=False), flush=True)
 
 class BatchPredictRequest(BaseModel):
-    images_base64: List[str] = Field(..., description="Lista de imagens em base64")
+    images_base64: list[str] = Field(..., description="Lista de imagens em base64")
     confidence: float = Field(0.25, ge=0.0, le=1.0)
     model_name: str = Field("yolov8n.pt")
 
