@@ -1,14 +1,18 @@
 import base64
 import io
+import json
 import time
-
-import httpx
-import numpy as np
+import uuid
+from pathlib import Path
+from typing import List, Optional
 from fastapi import FastAPI, HTTPException
-from model import get_default_model_name, load_model
 from PIL import Image
+import numpy as np
+import httpx
 from pydantic import BaseModel, Field
-from schemas import Detection, HealthResponse, PredictRequest, PredictResponse
+
+from schemas import PredictRequest, PredictResponse, HealthResponse, Detection
+from model import load_model, get_default_model_name
 
 app = FastAPI(
     title="YOLO Inference API",
@@ -18,8 +22,17 @@ app = FastAPI(
 
 _metrics = {"total": 0, "success": 0, "total_ms": 0.0}
 
+def log_event(event: str, level: str = "INFO", **kwargs):
+    record = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "level": level,
+        "event": event,
+        **kwargs,
+    }
+    print(json.dumps(record, ensure_ascii=False), flush=True)
+
 class BatchPredictRequest(BaseModel):
-    images_base64: list[str] = Field(..., description="Lista de imagens em base64")
+    images_base64: List[str] = Field(..., description="Lista de imagens em base64")
     confidence: float = Field(0.25, ge=0.0, le=1.0)
     model_name: str = Field("yolov8n.pt")
 
@@ -90,18 +103,31 @@ async def get_metrics():
 
 @app.post("/predict", response_model=PredictResponse)
 def predict(request: PredictRequest):
+    req_id = str(uuid.uuid4())[:8]
     _metrics["total"] += 1
+    log_event("predict_start", request_id=req_id, model=request.model_name, confidence=request.confidence)
     try:
         img = _load_image_from_request(request)
         res = _run_inference(img, request.model_name, request.confidence)
         _metrics["success"] += 1
         _metrics["total_ms"] += res.inference_ms
+        log_event(
+            "predict_complete",
+            request_id=req_id,
+            model=res.model_used,
+            detections=len(res.detections),
+            inference_ms=res.inference_ms,
+            image_size=f"{res.image_width}x{res.image_height}",
+        )
         return res
-    except HTTPException:
+    except HTTPException as e:
+        log_event("predict_error", level="WARN", request_id=req_id, reason=str(e.detail))
         raise
     except FileNotFoundError as e:
+        log_event("predict_error", level="ERROR", request_id=req_id, reason=str(e))
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
+        log_event("predict_error", level="ERROR", request_id=req_id, reason=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/predict/batch")
