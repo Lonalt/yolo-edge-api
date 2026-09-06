@@ -7,6 +7,7 @@ import numpy as np
 from fastapi import FastAPI, HTTPException
 from model import get_default_model_name, load_model
 from PIL import Image
+from pydantic import BaseModel, Field
 from schemas import Detection, HealthResponse, PredictRequest, PredictResponse
 
 app = FastAPI(
@@ -14,6 +15,13 @@ app = FastAPI(
     description="API REST para inferência com YOLOv8 no Raspberry Pi 5",
     version="1.0.0",
 )
+
+_metrics = {"total": 0, "success": 0, "total_ms": 0.0}
+
+class BatchPredictRequest(BaseModel):
+    images_base64: list[str] = Field(..., description="Lista de imagens em base64")
+    confidence: float = Field(0.25, ge=0.0, le=1.0)
+    model_name: str = Field("yolov8n.pt")
 
 def _decode_image(image_base64: str) -> np.ndarray:
     raw = base64.b64decode(image_base64)
@@ -43,11 +51,13 @@ def _run_inference(image_np: np.ndarray, model_name: str, confidence: float) -> 
             coords = box.xyxy[0].tolist()
             cls_id = int(box.cls[0].item())
             conf_val = float(box.conf[0].item())
-            detections.append(Detection(
-                label=model.names[cls_id],
-                confidence=round(conf_val, 4),
-                bbox=[round(float(c), 2) for c in coords],
-            ))
+            detections.append(
+                Detection(
+                    label=model.names[cls_id],
+                    confidence=round(conf_val, 4),
+                    bbox=[round(float(c), 2) for c in coords],
+                )
+            )
 
     h, w = image_np.shape[:2]
     return PredictResponse(
@@ -68,14 +78,42 @@ async def health_check():
         loaded = False
     return HealthResponse(status="ok", model_loaded=loaded, model_name=model_name)
 
+@app.get("/metrics")
+async def get_metrics():
+    avg_ms = _metrics["total_ms"] / _metrics["success"] if _metrics["success"] > 0 else 0.0
+    return {
+        "status": "ok",
+        "total_requests": _metrics["total"],
+        "successful_requests": _metrics["success"],
+        "avg_inference_ms": round(avg_ms, 2),
+    }
+
 @app.post("/predict", response_model=PredictResponse)
 def predict(request: PredictRequest):
+    _metrics["total"] += 1
     try:
         img = _load_image_from_request(request)
-        return _run_inference(img, request.model_name, request.confidence)
+        res = _run_inference(img, request.model_name, request.confidence)
+        _metrics["success"] += 1
+        _metrics["total_ms"] += res.inference_ms
+        return res
     except HTTPException:
         raise
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/predict/batch")
+def predict_batch(request: BatchPredictRequest):
+    t0 = time.perf_counter()
+    results = []
+    for b64 in request.images_base64:
+        img = _decode_image(b64)
+        res = _run_inference(img, request.model_name, request.confidence)
+        results.append(res)
+    total_ms = (time.perf_counter() - t0) * 1000
+    return {
+        "results": results,
+        "total_inference_ms": round(total_ms, 2),
+    }
