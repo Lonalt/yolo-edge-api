@@ -9,6 +9,7 @@ import numpy as np
 from fastapi import FastAPI, HTTPException
 from model import get_default_model_name, load_model
 from PIL import Image
+from preprocessor import CONFIG_DEFAULT, ImagePreprocessor
 from pydantic import BaseModel, Field
 from schemas import Detection, HealthResponse, PredictRequest, PredictResponse
 
@@ -19,6 +20,7 @@ app = FastAPI(
 )
 
 _metrics = {"total": 0, "success": 0, "total_ms": 0.0}
+preprocessor = ImagePreprocessor(CONFIG_DEFAULT)
 
 
 def log_event(event: str, level: str = "INFO", **kwargs):
@@ -57,8 +59,12 @@ def _load_image_from_request(request: PredictRequest) -> np.ndarray:
 
 def _run_inference(image_np: np.ndarray, model_name: str, confidence: float) -> PredictResponse:
     model = load_model(model_name)
+
+    # Pré-processamento
+    frame_proc = preprocessor.process(image_np)
+
     t0 = time.perf_counter()
-    results = model(image_np, conf=confidence, verbose=False)
+    results = model(frame_proc, conf=confidence, verbose=False)
     elapsed_ms = (time.perf_counter() - t0) * 1000
 
     detections = []
@@ -75,7 +81,7 @@ def _run_inference(image_np: np.ndarray, model_name: str, confidence: float) -> 
                 )
             )
 
-    h, w = image_np.shape[:2]
+    h, w = frame_proc.shape[:2]
     return PredictResponse(
         detections=detections,
         inference_ms=round(elapsed_ms, 2),
